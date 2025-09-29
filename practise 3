@@ -1,0 +1,141 @@
+const express = require('express');
+const app = express();
+app.use(express.json());
+
+class SeatManager {
+  constructor(rows = ['A','B','C'], cols = 10, defaultLockMs = 30000) {
+    this.seats = new Map();
+    this.lockMs = defaultLockMs;
+    for (const r of rows) {
+      for (let c = 1; c <= cols; c++) {
+        const id = `${r}${c}`;
+        this.seats.set(id, { id, status: 'available', lockedBy: null, lockExpiresAt: null, lockTimer: null });
+      }
+    }
+  }
+
+  listSeats() {
+    return Array.from(this.seats.values()).map(s => ({ id: s.id, status: s.status, lockedBy: s.lockedBy, lockExpiresAt: s.lockExpiresAt }));
+  }
+
+  _startLockTimer(seat) {
+    if (seat.lockTimer) clearTimeout(seat.lockTimer);
+    const timeLeft = Math.max(0, seat.lockExpiresAt - Date.now());
+    seat.lockTimer = setTimeout(() => {
+      if (seat.status === 'locked' && seat.lockExpiresAt && seat.lockExpiresAt <= Date.now()) {
+        seat.status = 'available';
+        seat.lockedBy = null;
+        seat.lockExpiresAt = null;
+        seat.lockTimer = null;
+      }
+    }, timeLeft + 5);
+  }
+
+  lockSeats(seatIds, userId) {
+    const now = Date.now();
+    const locked = [];
+    const failed = [];
+    for (const id of seatIds) {
+      const seat = this.seats.get(id);
+      if (!seat) { failed.push({ id, reason: 'not_found' }); continue; }
+      if (seat.status === 'available') {
+        seat.status = 'locked';
+        seat.lockedBy = userId;
+        seat.lockExpiresAt = now + this.lockMs;
+        this._startLockTimer(seat);
+        locked.push(id);
+      } else if (seat.status === 'locked' && seat.lockedBy === userId) {
+        seat.lockExpiresAt = now + this.lockMs;
+        this._startLockTimer(seat);
+        locked.push(id);
+      } else {
+        failed.push({ id, reason: seat.status === 'reserved' ? 'already_reserved' : 'locked_by_other', lockedBy: seat.lockedBy });
+      }
+    }
+    return { ok: failed.length === 0, locked, failed };
+  }
+
+  unlockSeats(seatIds, userId) {
+    const unlocked = [];
+    const failed = [];
+    for (const id of seatIds) {
+      const seat = this.seats.get(id);
+      if (!seat) { failed.push({ id, reason: 'not_found' }); continue; }
+      if (seat.status === 'locked' && seat.lockedBy === userId) {
+        seat.status = 'available';
+        seat.lockedBy = null;
+        seat.lockExpiresAt = null;
+        if (seat.lockTimer) { clearTimeout(seat.lockTimer); seat.lockTimer = null; }
+        unlocked.push(id);
+      } else { failed.push({ id, reason: 'not_locked_by_you' }); }
+    }
+    return { ok: failed.length === 0, unlocked, failed };
+  }
+
+  reserveSeats(seatIds, userId) {
+    const reserved = [];
+    const failed = [];
+    for (const id of seatIds) {
+      const seat = this.seats.get(id);
+      if (!seat) { failed.push({ id, reason: 'not_found' }); continue; }
+      if (seat.status === 'locked' && seat.lockedBy === userId && seat.lockExpiresAt > Date.now()) {
+        seat.status = 'reserved';
+        seat.lockedBy = null;
+        seat.lockExpiresAt = null;
+        if (seat.lockTimer) { clearTimeout(seat.lockTimer); seat.lockTimer = null; }
+        reserved.push(id);
+      } else if (seat.status === 'reserved') {
+        failed.push({ id, reason: 'already_reserved' });
+      } else { failed.push({ id, reason: 'not_locked_by_you_or_lock_expired' }); }
+    }
+    return { ok: failed.length === 0, reserved, failed };
+  }
+
+  getSeat(id) {
+    const s = this.seats.get(id);
+    if (!s) return null;
+    return { id: s.id, status: s.status, lockedBy: s.lockedBy, lockExpiresAt: s.lockExpiresAt };
+  }
+
+  setLockTimeout(ms) { this.lockMs = ms; }
+}
+
+const manager = new SeatManager(['A','B','C','D'], 8, 20000);
+
+app.get('/seats', (req, res) => { res.json(manager.listSeats()); });
+app.get('/seats/:id', (req, res) => {
+  const seat = manager.getSeat(req.params.id);
+  if (!seat) return res.status(404).json({ error: 'not_found' });
+  res.json(seat);
+});
+
+app.post('/lock', (req, res) => {
+  const { seatIds, userId, lockMs } = req.body;
+  if (lockMs && Number.isInteger(lockMs) && lockMs > 0) manager.setLockTimeout(lockMs);
+  if (!Array.isArray(seatIds) || seatIds.length === 0) return res.status(400).json({ error: 'seatIds array required' });
+  if (!userId) return res.status(400).json({ error: 'userId required' });
+  const result = manager.lockSeats(seatIds, userId);
+  if (result.ok) return res.status(200).json(result);
+  return res.status(409).json(result);
+});
+
+app.post('/unlock', (req, res) => {
+  const { seatIds, userId } = req.body;
+  if (!Array.isArray(seatIds) || seatIds.length === 0) return res.status(400).json({ error: 'seatIds array required' });
+  if (!userId) return res.status(400).json({ error: 'userId required' });
+  const result = manager.unlockSeats(seatIds, userId);
+  if (result.ok) return res.status(200).json(result);
+  return res.status(409).json(result);
+});
+
+app.post('/reserve', (req, res) => {
+  const { seatIds, userId } = req.body;
+  if (!Array.isArray(seatIds) || seatIds.length === 0) return res.status(400).json({ error: 'seatIds array required' });
+  if (!userId) return res.status(400).json({ error: 'userId required' });
+  const result = manager.reserveSeats(seatIds, userId);
+  if (result.ok) return res.status(200).json(result);
+  return res.status(409).json(result);
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Ticket booking server running at http://localhost:${PORT}`));
