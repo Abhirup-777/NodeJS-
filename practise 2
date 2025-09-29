@@ -1,0 +1,59 @@
+const express = require('express');
+const app = express();
+app.use(express.json());
+
+let cards = [];
+
+function generateId() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+app.get('/cards', (req, res) => {
+  res.json(cards);
+});
+
+app.post('/cards', (req, res) => {
+  const { id, suit, rank } = req.body;
+  if (!suit || !rank) {
+    return res.status(400).json({ error: 'Both "suit" and "rank" are required.' });
+  }
+
+  const newId = id ? String(id) : generateId();
+  if (cards.some(c => c.id === newId)) {
+    return res.status(409).json({ error: 'Card with this id already exists.' });
+  }
+
+  const card = { id: newId, suit: String(suit), rank: String(rank) };
+  cards.push(card);
+  res.status(201).json({ message: 'Card added', card });
+});
+
+app.get('/cards/:id', (req, res) => {
+  const card = cards.find(c => c.id === req.params.id);
+  if (!card) return res.status(404).json({ error: 'Card not found' });
+  res.json(card);
+});
+
+app.put('/cards/:id', (req, res) => {
+  const card = cards.find(c => c.id === req.params.id);
+  if (!card) return res.status(404).json({ error: 'Card not found' });
+
+  const { suit, rank } = req.body;
+  if (!suit && !rank) {
+    return res.status(400).json({ error: 'Provide at least "suit" or "rank" to update.' });
+  }
+  if (suit) card.suit = String(suit);
+  if (rank) card.rank = String(rank);
+
+  res.json({ message: 'Card updated', card });
+});
+
+app.delete('/cards/:id', (req, res) => {
+  const idx = cards.findIndex(c => c.id === req.params.id);
+  if (idx === -1) return res.status(404).json({ error: 'Card not found' });
+  const removed = cards.splice(idx, 1)[0];
+  res.json({ message: 'Card deleted', card: removed });
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server running at http://localhost:${PORT}`));
