@@ -1,0 +1,57 @@
+const express = require('express');
+const mongoose = require('mongoose');
+const app = express();
+app.use(express.json());
+
+mongoose.connect('mongodb://localhost:27017/ecommerceDB', {
+    useNewUrlParser: true,
+    useUnifiedTopology: true
+});
+
+const reviewSchema = new mongoose.Schema({
+    user: String,
+    rating: Number,
+    comment: String
+});
+
+const productSchema = new mongoose.Schema({
+    name: String,
+    price: Number,
+    description: String,
+    reviews: [reviewSchema]
+});
+
+const categorySchema = new mongoose.Schema({
+    name: String,
+    products: [productSchema]
+});
+
+const Category = mongoose.model('Category', categorySchema);
+
+app.post('/categories', async (req, res) => {
+    const category = new Category(req.body);
+    await category.save();
+    res.send(category);
+});
+
+app.get('/categories', async (req, res) => {
+    const categories = await Category.find();
+    res.send(categories);
+});
+
+app.post('/categories/:id/products', async (req, res) => {
+    const category = await Category.findById(req.params.id);
+    category.products.push(req.body);
+    await category.save();
+    res.send(category);
+});
+
+app.post('/categories/:catId/products/:prodId/reviews', async (req, res) => {
+    const category = await Category.findById(req.params.catId);
+    const product = category.products.id(req.params.prodId);
+    product.reviews.push(req.body);
+    await category.save();
+    res.send(product);
+});
+
+app.listen(3000, () => console.log('Server running on port 3000'));
